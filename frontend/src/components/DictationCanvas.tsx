@@ -1,14 +1,22 @@
 'use client';
 import React, { useState, useEffect, useRef } from 'react';
 import { useDictationStore } from '@/store/useDictationStore';
+import { useUIStore } from '@/store/useUIStore';
 import { useNativeDictation } from '@/hooks/useNativeDictation';
 import { Mic, MicOff, Square, Play } from 'lucide-react';
 
 export default function DictationCanvas() {
-  const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   
-  const { unprocessedPhrase, clearUnprocessedPhrase, interimText, isRecording } = useDictationStore();
+  const { setCurrentView } = useUIStore();
+  const { 
+    unprocessedPhrase, 
+    clearUnprocessedPhrase, 
+    interimText, 
+    isRecording,
+    documentText,
+    setDocumentText
+  } = useDictationStore();
   const { startRecording, stopRecording, pauseForTyping } = useNativeDictation();
 
   // Sincronización del Cursor con texto dictado
@@ -18,8 +26,8 @@ export default function DictationCanvas() {
       const start = el.selectionStart;
       const end = el.selectionEnd;
       
-      const newText = text.substring(0, start) + unprocessedPhrase + text.substring(end);
-      setText(newText);
+      const newText = documentText.substring(0, start) + unprocessedPhrase + documentText.substring(end);
+      setDocumentText(newText);
       clearUnprocessedPhrase();
       
       // Mover el cursor después de que React actualice el DOM
@@ -29,7 +37,7 @@ export default function DictationCanvas() {
         el.focus();
       }, 10);
     }
-  }, [unprocessedPhrase, text, clearUnprocessedPhrase]);
+  }, [unprocessedPhrase, documentText, setDocumentText, clearUnprocessedPhrase]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     // Excluir teclas de navegación para no pausar si el usuario solo se mueve
@@ -39,7 +47,7 @@ export default function DictationCanvas() {
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value);
+    setDocumentText(e.target.value);
   };
 
   return (
@@ -67,6 +75,7 @@ export default function DictationCanvas() {
             </button>
           )}
           <button 
+            onClick={() => setCurrentView('review')}
             className="flex items-center gap-2 px-4 py-2 bg-slate-800 text-white hover:bg-slate-900 rounded-lg transition-colors font-medium ml-2"
           >
             <Square size={18} /> Finalizar y Revisar
@@ -78,7 +87,7 @@ export default function DictationCanvas() {
       <div className="relative flex-grow h-full min-h-[400px]">
         <textarea
           ref={textareaRef}
-          value={text}
+          value={documentText}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
           className="w-full h-full p-4 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-950 text-slate-800 dark:text-slate-200 text-lg leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none font-serif"

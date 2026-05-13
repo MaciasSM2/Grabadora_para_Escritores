@@ -1,5 +1,10 @@
 fastapi
 uvicorn
-SpeechRecognition
-ffmpeg-python
+pydantic
+python-multipart
 SQLAlchemy
+vosk
+spacy
+# NOTA: FFmpeg debe instalarse a nivel de sistema (no via pip)
+# Windows: winget install Gyan.FFmpeg
+# Linux/Mac: sudo apt install ffmpeg / brew install ffmpeg

@@ -1,6 +1,6 @@
 {
   "name": "frontend",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9,17 +9,19 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "diff": "^9.0.0",
+    "docx": "^9.6.1",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.14.0",
     "mammoth": "^1.12.0",
     "next": "16.2.6",
     "react": "19.2.4",
-    "react-diff-viewer-continued": "^4.2.2",
     "react-dom": "19.2.4",
     "zustand": "^5.0.13"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
+    "@types/diff": "^7.0.2",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",

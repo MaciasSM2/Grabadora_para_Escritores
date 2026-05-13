@@ -51,3 +51,12 @@ yarn-error.log*
 # Typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Gema Specific
+backend/model_es/
+backend/local_history_vault/
+backend/temp_*
+backend/test_audio.wav
+test_transcribe.py
+backend/test_audio.wav
+backend/temp_converted_test_audio.wav.wav

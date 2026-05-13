@@ -8,7 +8,8 @@ export const useNativeDictation = () => {
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
+      const win = window as any;
+      const SpeechRecognition = win.SpeechRecognition || win.webkitSpeechRecognition;
       if (!SpeechRecognition) {
         console.warn("Web Speech API no está soportada en este navegador.");
         return;
