@@ -11,7 +11,7 @@ import { API_BASE } from '@/lib/api';
 import { exportTXT, exportAPACDocx } from '@/utils/exportUtils';
 
 export default function SettingsMenu() {
-  const { isSettingsOpen, settingsActiveTab, openSettings, closeSettings, setSettingsTab } = useUIStore();
+  const { isSettingsOpen, settingsActiveTab, openSettings, closeSettings, setSettingsTab, setCurrentView } = useUIStore();
   
   const { toneName, referenceText, setTone } = useToneStore();
   const { jobs, addJob, savedDocs, fetchHistory, fetchSavedDocs } = useHistoryStore();
@@ -122,9 +122,13 @@ export default function SettingsMenu() {
           exportTXT(text, title);
         } else if (action === 'download-docx') {
           await exportAPACDocx(text, title);
-        } else if (action === 'edit' || action === 'reprocess') {
+        } else if (action === 'edit') {
           setDocumentText(text);
           closeSettings();
+        } else if (action === 'reprocess') {
+          setDocumentText(text);
+          closeSettings();
+          setCurrentView('review');
         }
       }
     } catch(e) {

@@ -1,5 +1,6 @@
 import spacy
 import re
+from typing import Optional
 
 class StyleProcessor:
     def __init__(self):
@@ -10,7 +11,7 @@ class StyleProcessor:
             print("El modelo de spaCy 'es_core_news_sm' no está instalado. Asegúrate de ejecutar: python -m spacy download es_core_news_sm")
             self.nlp = None
 
-    def process_text(self, text: str, tone_name: str, reference_text: str = None) -> str:
+    def process_text(self, text: str, tone_name: str, reference_text: Optional[str] = None) -> str:
         if not self.nlp:
             return text
             
@@ -75,5 +76,18 @@ class StyleProcessor:
             
         for old, new in muletillas.items():
             corrected_text = re.sub(old, new, corrected_text, flags=re.IGNORECASE)
+            
+        # 3. Incorporar texto de referencia heurísticamente
+        if reference_text:
+            doc_ref = self.nlp(reference_text)
+            # Extraer palabras clave: adjetivos y verbos largos
+            palabras_clave = [token.text.lower() for token in doc_ref if token.pos_ in ['ADJ', 'VERB'] and len(token.text) > 6]
+            if palabras_clave:
+                from collections import Counter
+                # Tomar las 5 más comunes
+                comunes = [word for word, count in Counter(palabras_clave).most_common(5)]
+                suffix += f"\n\n[Vocabulario de Referencia Sugerido: {', '.join(comunes)}]"
+            else:
+                suffix += "\n\n[Estilo de Referencia Analizado]"
             
         return corrected_text + suffix

@@ -4,7 +4,8 @@ import { useDictationStore } from '@/store/useDictationStore';
 export const useNativeDictation = () => {
   const { setRecording, setInterimText, addUnprocessedPhrase, isRecording } = useDictationStore();
   const recognitionRef = useRef<any>(null);
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const manualStopRef = useRef<boolean>(true);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -47,14 +48,22 @@ export const useNativeDictation = () => {
       };
 
       recognitionRef.current.onend = () => {
-        // En Android/Chrome, a veces se detiene solo. Podríamos reiniciarlo si isRecording es true,
-        // pero por ahora lo mantenemos simple.
-        setRecording(false);
+        if (!manualStopRef.current) {
+          try {
+            recognitionRef.current.start();
+          } catch(e) {
+            console.warn("Error al auto-reiniciar", e);
+            setRecording(false);
+          }
+        } else {
+          setRecording(false);
+        }
       };
     }
   }, [addUnprocessedPhrase, setInterimText, setRecording]);
 
   const startRecording = useCallback(() => {
+    manualStopRef.current = false;
     if (recognitionRef.current) {
       try {
         recognitionRef.current.start();
@@ -66,6 +75,7 @@ export const useNativeDictation = () => {
   }, [setRecording]);
 
   const stopRecording = useCallback(() => {
+    manualStopRef.current = true;
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
@@ -77,8 +87,10 @@ export const useNativeDictation = () => {
   }, [setRecording]);
 
   const pauseForTyping = useCallback(() => {
-    // Si estaba grabando, lo detenemos temporalmente (debounce 1500ms)
-    stopRecording();
+    // Si estaba grabando, lo detenemos temporalmente (sólo la primera vez para evitar parpadeos)
+    if (!manualStopRef.current) {
+      stopRecording();
+    }
     
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);

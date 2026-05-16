@@ -153,7 +153,7 @@ export default function CorrectionReviewer({ rawText, toneName }: CorrectionRevi
     return chunkList
       .map((chunk) => {
         if (!chunk.added && !chunk.removed) return chunk.value;
-        const effectiveStatus = chunk.status === 'pending' ? 'accepted' : chunk.status;
+        const effectiveStatus = chunk.status === 'pending' ? 'rejected' : chunk.status;
         if (chunk.removed && effectiveStatus === 'rejected') return chunk.value;
         if (chunk.added && effectiveStatus === 'accepted') return chunk.value;
         return '';
