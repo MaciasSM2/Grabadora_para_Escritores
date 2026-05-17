@@ -1,6 +1,5 @@
 'use client';
 import React, { useState, useEffect, useRef } from 'react';
-import { diffWords } from 'diff';
 import {
   Check, X as XIcon, ArrowLeft, CheckCircle2,
   Download, FileText, File as FileIcon, ChevronDown,
@@ -9,7 +8,7 @@ import {
 import { useDictationStore } from '@/store/useDictationStore';
 import { useToneStore } from '@/store/useToneStore';
 import { useUIStore } from '@/store/useUIStore';
-import { exportTXT, exportPDF, exportAPACDocx } from '@/utils/exportUtils';
+import { exportService, ExportFormat } from '@/infrastructure/export/ExportService';
 import { API_BASE } from '@/lib/api';
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
@@ -74,6 +73,7 @@ interface CorrectionReviewerProps {
 export default function CorrectionReviewer({ rawText, toneName }: CorrectionReviewerProps) {
   const [correctedText, setCorrectedText] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isDiffing, setIsDiffing] = useState(false);
   const [chunks, setChunks] = useState<DiffChunk[]>([]);
   const [activeTooltipId, setActiveTooltipId] = useState<string | null>(null);
   const [isExportOpen, setIsExportOpen] = useState(false);
@@ -82,6 +82,21 @@ export default function CorrectionReviewer({ rawText, toneName }: CorrectionRevi
   const { setDocumentText } = useDictationStore();
   const { setCurrentView } = useUIStore();
   const exportRef = useRef<HTMLDivElement>(null);
+  const workerRef = useRef<Worker | null>(null);
+
+  // Inicializar y limpiar el Web Worker.
+  // Se instancia con try/catch por si el navegador no soporta Workers.
+  useEffect(() => {
+    try {
+      workerRef.current = new Worker(new URL('../lib/diffWorker.ts', import.meta.url));
+    } catch (e) {
+      console.warn('[CorrectionReviewer] Web Workers no disponibles en este entorno.', e);
+      workerRef.current = null;
+    }
+    return () => {
+      workerRef.current?.terminate();
+    };
+  }, []);
 
   // Cerrar tooltip al hacer clic fuera
   useEffect(() => {
@@ -99,19 +114,33 @@ export default function CorrectionReviewer({ rawText, toneName }: CorrectionRevi
     return () => clearTimeout(t);
   }, [toast]);
 
-  // Calcular diff cuando llega el texto corregido
+  // Calcular diff usando el Web Worker.
+  // Se usa AbortController para cancelar la suscripción al evento si rawText/correctedText
+  // cambian antes de que el Worker responda, evitando un race condition clásico.
   useEffect(() => {
-    if (rawText && correctedText) {
-      const diffResult = diffWords(rawText, correctedText);
-      const initialChunks: DiffChunk[] = diffResult.map((change, index) => ({
-        id: `chunk-${index}-${Date.now()}`,
-        value: change.value,
-        added: change.added,
-        removed: change.removed,
-        status: 'pending',
-      }));
-      setChunks(initialChunks);
-    }
+    if (!rawText || !correctedText || !workerRef.current) return;
+
+    setIsDiffing(true);
+    const controller = new AbortController();
+
+    const handleMessage = (event: MessageEvent) => {
+      // Si el controller fue abortado, ignoramos la respuesta stale del Worker.
+      if (controller.signal.aborted) return;
+
+      if (event.data.type === 'SUCCESS') {
+        setChunks(event.data.chunks);
+      } else {
+        console.error('[Worker Error]', event.data.error);
+        setToast('Error procesando diferencias.');
+      }
+      setIsDiffing(false);
+    };
+
+    workerRef.current.addEventListener('message', handleMessage, { signal: controller.signal });
+    workerRef.current.postMessage({ rawText, correctedText });
+
+    // Cleanup: abortar el listener si el efecto se re-ejecuta o el componente se desmonta.
+    return () => controller.abort();
   }, [rawText, correctedText]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
@@ -149,8 +178,8 @@ export default function CorrectionReviewer({ rawText, toneName }: CorrectionRevi
     setToast('Todos los cambios aceptados.');
   };
 
-  const buildFinalText = (chunkList: DiffChunk[]): string => {
-    return chunkList
+  const finalText = React.useMemo(() => {
+    return chunks
       .map((chunk) => {
         if (!chunk.added && !chunk.removed) return chunk.value;
         const effectiveStatus = chunk.status === 'pending' ? 'rejected' : chunk.status;
@@ -159,10 +188,15 @@ export default function CorrectionReviewer({ rawText, toneName }: CorrectionRevi
         return '';
       })
       .join('');
-  };
+  }, [chunks]);
+
+  const pendingCount = React.useMemo(() => {
+    return chunks.filter(
+      (c) => c.status === 'pending' && (c.added || c.removed)
+    ).length;
+  }, [chunks]);
 
   const handleSaveAndReturn = () => {
-    const finalText = buildFinalText(chunks);
     setDocumentText(finalText);
     setCurrentView('dictation');
   };
@@ -174,11 +208,11 @@ export default function CorrectionReviewer({ rawText, toneName }: CorrectionRevi
   // ── Export helpers ────────────────────────────────────────────────────────
 
   const getExportText = (): string => {
-    if (chunks.length > 0) return buildFinalText(chunks);
+    if (chunks.length > 0) return finalText;
     return correctedText ?? rawText;
   };
 
-  const handleExport = async (format: 'txt' | 'docx' | 'pdf') => {
+  const handleExport = async (format: ExportFormat) => {
     const text = getExportText();
     if (!text) {
       setToast('No hay contenido para exportar.');
@@ -186,9 +220,7 @@ export default function CorrectionReviewer({ rawText, toneName }: CorrectionRevi
     }
     setIsExportOpen(false);
     try {
-      if (format === 'txt') exportTXT(text);
-      else if (format === 'pdf') exportPDF(text);
-      else await exportAPACDocx(text);
+      await exportService.exportDocument(format, text);
       setToast('Archivo descargado con éxito.');
     } catch (e) {
       setToast('Error al generar el archivo de exportación.');
@@ -197,9 +229,7 @@ export default function CorrectionReviewer({ rawText, toneName }: CorrectionRevi
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
-  const pendingCount = chunks.filter(
-    (c) => c.status === 'pending' && (c.added || c.removed)
-  ).length;
+  // Eliminamos el cálculo redundante que estaba aquí
 
   return (
     <div className="flex flex-col h-full">
@@ -293,6 +323,19 @@ export default function CorrectionReviewer({ rawText, toneName }: CorrectionRevi
       {/* ── Cuerpo: Hoja de papel editorial ── */}
       <div className="flex-1 flex flex-col overflow-auto">
         {correctedText ? (
+          isDiffing ? (
+            <div className="flex-1 flex items-center justify-center min-h-[50vh]">
+              <div className="text-center max-w-md px-6">
+                <Loader2 size={36} className="text-purple-400 animate-spin mx-auto mb-4" />
+                <h3 className="text-xl font-bold text-slate-700 dark:text-slate-200 mb-2">
+                  Calculando diferencias...
+                </h3>
+                <p className="text-sm text-slate-400 dark:text-slate-500">
+                  Estamos comparando tu borrador con la versión corregida.
+                </p>
+              </div>
+            </div>
+          ) : (
           // Vista Track Changes — documento unificado centrado
           <div className="flex justify-center w-full">
             <div
@@ -395,6 +438,7 @@ export default function CorrectionReviewer({ rawText, toneName }: CorrectionRevi
               </div>
             </div>
           </div>
+          )
         ) : (
           // Estado inicial — sin texto procesado todavía
           <div className="flex-1 flex items-center justify-center min-h-[50vh]">

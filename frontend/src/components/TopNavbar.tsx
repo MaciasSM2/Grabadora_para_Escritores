@@ -3,7 +3,8 @@ import React, { useState, useEffect } from 'react';
 import { Download, FileText, File as FileIcon, Save, ChevronDown, CheckCircle2, AlertCircle } from 'lucide-react';
 import { useDictationStore } from '@/store/useDictationStore';
 import { useToneStore } from '@/store/useToneStore';
-import { exportTXT, exportPDF, exportAPACDocx, saveNewDocument } from '@/utils/exportUtils';
+import { exportService, ExportFormat } from '@/infrastructure/export/ExportService';
+import { documentApiService } from '@/infrastructure/api/DocumentApiService';
 import SettingsMenu from './SettingsMenu';
 
 type ToastType = 'success' | 'error';
@@ -34,25 +35,24 @@ export default function TopNavbar() {
   const handleSaveDraft = async () => {
     if (!documentText) return;
     setIsSaving(true);
-    const success = await saveNewDocument(documentText, toneName, resetStore);
+    const success = await documentApiService.saveDocument(documentText, toneName);
     setIsSaving(false);
     if (success) {
+      resetStore();
       showToast('Borrador guardado. El lienzo ha sido limpiado.', 'success');
     } else {
       showToast('Error al guardar. ¿Está corriendo el backend?', 'error');
     }
   };
 
-  const handleExport = async (format: 'txt' | 'docx' | 'pdf') => {
+  const handleExport = async (format: ExportFormat) => {
     if (!documentText) {
       showToast('No hay texto para exportar.', 'error');
       return;
     }
     setIsExportMenuOpen(false);
     try {
-      if (format === 'txt') exportTXT(documentText);
-      else if (format === 'pdf') exportPDF(documentText);
-      else await exportAPACDocx(documentText);
+      await exportService.exportDocument(format, documentText);
       showToast('Archivo descargado con éxito.', 'success');
     } catch (e) {
       showToast('Error al generar el archivo.', 'error');

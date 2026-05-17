@@ -2,8 +2,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useDictationStore } from '@/store/useDictationStore';
 import { useUIStore } from '@/store/useUIStore';
-import { useNativeDictation } from '@/hooks/useNativeDictation';
-import { Mic, MicOff, Square, Play } from 'lucide-react';
+import { useCleanDictation } from '@/hooks/useCleanDictation';
+import { Mic, MicOff, Square } from 'lucide-react';
 
 export default function DictationCanvas() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -17,7 +17,7 @@ export default function DictationCanvas() {
     documentText,
     setDocumentText
   } = useDictationStore();
-  const { startRecording, stopRecording, pauseForTyping } = useNativeDictation();
+  const { startRecording, stopRecording, pauseForTyping } = useCleanDictation();
 
   // Sincronización del Cursor con texto dictado
   useEffect(() => {

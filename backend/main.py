@@ -1,40 +1,39 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 import shutil
 import os
-import subprocess
-import wave
-import json
 import datetime
-from typing import Optional
-from vosk import Model, KaldiRecognizer
+import logging
+import time
 
 import models
 from database import engine, SessionLocal
 from nlp_processor import StyleProcessor
+from services.transcription_service import TranscriptionService
+from schemas import ProcessTextRequest, ToneRequest, SaveDocumentRequest
+
+# Configuración de Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("gema-backend")
 
 # Inicializar Base de datos
 models.Base.metadata.create_all(bind=engine)
 
-# Inicializar procesador de estilo
+# Inicializar Servicios
 style_processor = StyleProcessor()
+transcription_service = TranscriptionService("model_es")
 
-# Rutas absolutas basadas en la ubicación del archivo (compatibilidad Windows)
+# Rutas absolutas
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VAULT_DIR = os.path.join(BASE_DIR, "local_history_vault")
 os.makedirs(VAULT_DIR, exist_ok=True)
 
-app = FastAPI(title="Gema - STT Backend")
-
-# Cargar modelo de Vosk en memoria (solo una vez al inicio)
-try:
-    vosk_model = Model("model_es")
-    print("Modelo Vosk cargado exitosamente.")
-except Exception as e:
-    vosk_model = None
-    print(f"Error cargando modelo Vosk: {e}. Asegúrate de haber ejecutado download_model.py")
+app = FastAPI(title="Gema - STT Backend (Refactored)")
 
 app.add_middleware(
     CORSMiddleware,
@@ -54,95 +53,85 @@ def get_db():
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "Gema STT Backend Running"}
+    return {"status": "ok", "message": "Gema STT Backend Running (Async Enabled)"}
 
 @app.post("/api/transcribe/file")
 async def transcribe_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    # Validador de audio y FFmpeg pipeline
-    temp_input_path = f"temp_{file.filename}"
-    temp_wav_path = f"temp_converted_{file.filename}.wav"
+    import uuid
+    
+    # Sanitizar y validar formato de audio de forma preventiva
+    if file.content_type and not file.content_type.startswith("audio/"):
+        allowed_extensions = {'.mp3', '.wav', '.ogg', '.opus', '.m4a', '.webm', '.aac', '.flac'}
+        file_ext = os.path.splitext(file.filename)[1].lower() if file.filename else ""
+        if file_ext not in allowed_extensions:
+            logger.warning(f"Intento de subir archivo no soportado: {file.filename} (MIME: {file.content_type})")
+            raise HTTPException(status_code=400, detail="El archivo no es un formato de audio soportado.")
+
+    unique_id = str(uuid.uuid4())
+    file_ext = os.path.splitext(file.filename)[1] if file.filename else ".tmp"
+    # Filtrar caracteres raros de la extensión para mayor seguridad
+    file_ext = "".join(c for c in file_ext if c.isalnum() or c == ".").lower()
+    if not file_ext:
+        file_ext = ".tmp"
+
+    temp_input_path = f"temp_{unique_id}{file_ext}"
+    temp_wav_path = f"temp_{unique_id}_converted.wav"
+    
+    logger.info(f"Recibida solicitud de transcripción: {file.filename} -> Guardando temporalmente como {temp_input_path}")
+    start_time = time.time()
     
     try:
-        # Guardar archivo subido temporalmente
+        # Guardar archivo subido sin bloquear el event loop
         with open(temp_input_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        # Pipeline a prueba de fallos: Convertir a wav 16kHz mono usando FFmpeg
-        command = [
-            "ffmpeg", "-y", "-i", temp_input_path, 
-            "-ar", "16000", "-ac", "1", temp_wav_path
-        ]
-        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        
-        # Reconocimiento Offline con Vosk — usar `with` para garantizar cierre del handle en Windows
-        if vosk_model is None:
-            raise HTTPException(status_code=500, detail="El modelo de voz Vosk no está configurado.")
-
-        with wave.open(temp_wav_path, "rb") as wf:
-            if wf.getnchannels() != 1 or wf.getsampwidth() != 2 or wf.getcomptype() != "NONE":
-                raise HTTPException(status_code=400, detail="El formato de audio no es válido para Vosk.")
-
-            rec = KaldiRecognizer(vosk_model, wf.getframerate())
-            rec.SetWords(True)
-
-            results = []
             while True:
-                data = wf.readframes(4000)
-                if len(data) == 0:
+                chunk = await file.read(65536) # 64KB chunks
+                if not chunk:
                     break
-                if rec.AcceptWaveform(data):
-                    part_result = json.loads(rec.Result())
-                    results.append(part_result.get("text", ""))
-
-            part_result = json.loads(rec.FinalResult())
-            results.append(part_result.get("text", ""))
-
-        # El handle de wf ya está cerrado aquí — seguro para borrar en Windows
-        transcription_real = " ".join(filter(None, results)).strip()
+                buffer.write(chunk)
         
-        # Guardar en el historial de BD local (SQLite)
+        # 1. Conversión Asíncrona y Transcripción en ProcessPool
+        transcription_real = await transcription_service.process_audio(temp_input_path, temp_wav_path)
+        
+        execution_time = time.time() - start_time
+        logger.info(f"Job completado en {execution_time:.2f}s")
+
+        # 3. Persistencia
         db_job = models.JobHistory(
             filename=file.filename,
-            original_format=file.filename.split(".")[-1],
+            original_format=file.filename.split(".")[-1] if file.filename and "." in file.filename else "unknown",
             transcription=transcription_real
         )
         db.add(db_job)
         db.commit()
         db.refresh(db_job)
 
-        return {"transcription": transcription_real, "job_id": db_job.id}
+        return {
+            "transcription": transcription_real, 
+            "job_id": db_job.id, 
+            "execution_time": execution_time
+        }
 
-
-    except FileNotFoundError as e:
-        error_msg = f"FFmpeg no está instalado o no se encuentra en el PATH. Error real: {e}"
-        print(f"CRITICAL ERROR: {error_msg}")
-        raise HTTPException(status_code=500, detail="Falta dependencia del sistema: FFmpeg. Instálalo en Windows y agrégalo al PATH.")
-    except subprocess.CalledProcessError as e:
-        stderr_output = e.stderr.decode('utf-8') if e.stderr else 'Sin salida de error'
-        error_msg = f"FFmpeg falló al procesar el archivo. Detalle: {stderr_output}"
-        print(f"FFMPEG ERROR: {error_msg}")
-        raise HTTPException(status_code=400, detail=error_msg)
     except Exception as e:
-        print(f"TRANSCRIPTION EXCEPTION: {e}")
-        raise HTTPException(status_code=500, detail=f"Fallo interno en transcripción: {str(e)}")
+        logger.exception("Error en el pipeline de transcripción")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Fallo interno al procesar el audio: {str(e)}"
+        )
     finally:
-        # Limpieza segura para evitar fatal errors por disco lleno
-        if os.path.exists(temp_input_path):
-            os.remove(temp_input_path)
-        if os.path.exists(temp_wav_path):
-            os.remove(temp_wav_path)
-
-class ProcessTextRequest(BaseModel):
-    raw_text: str
-    tone_name: str
+        # Limpieza
+        for path in [temp_input_path, temp_wav_path]:
+            if os.path.exists(path):
+                try:
+                    os.remove(path)
+                except Exception as e:
+                    logger.warning(f"No se pudo eliminar {path}: {e}")
 
 @app.post("/api/process-text")
 async def process_text(request: ProcessTextRequest, db: Session = Depends(get_db)):
-    # Obtener el texto de referencia para este tono desde la DB
     tone_settings = db.query(models.ToneSettings).filter(models.ToneSettings.tone_name == request.tone_name).first()
     reference_text = tone_settings.reference_text if tone_settings else ""
     
-    # Aplicar las reglas de NLP sin IA según el tono seleccionado
+    # NLP Heurístico
     corrected_text = style_processor.process_text(request.raw_text, request.tone_name, reference_text)
     
     return {"corrected_text": corrected_text}
@@ -156,10 +145,6 @@ def get_history(db: Session = Depends(get_db)):
         "transcription": job.transcription,
         "createdAt": job.created_at.isoformat()
     } for job in jobs]
-
-class ToneRequest(BaseModel):
-    tone_name: str
-    reference_text: str
 
 @app.post("/api/tones")
 def save_tone(request: ToneRequest, db: Session = Depends(get_db)):
@@ -177,11 +162,6 @@ def get_tones(db: Session = Depends(get_db)):
     tones = db.query(models.ToneSettings).all()
     return {tone.tone_name: tone.reference_text for tone in tones}
 
-class SaveDocumentRequest(BaseModel):
-    text: str
-    tone_name: str
-    title: Optional[str] = None
-
 @app.post("/api/history/save")
 def save_document_history(request: SaveDocumentRequest, db: Session = Depends(get_db)):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -189,7 +169,9 @@ def save_document_history(request: SaveDocumentRequest, db: Session = Depends(ge
     filename = f"{doc_title.replace(' ', '_')}_{timestamp}.txt"
     file_path = os.path.join(VAULT_DIR, filename)
     
-    with open(file_path, "w", encoding="utf-8") as f:
+    # BUG FIX: Usando open() síncrono. Este endpoint es sync (def, no async def),
+    # por lo que usar aiofiles con await era un RuntimeError garantizado.
+    with open(file_path, mode="w", encoding="utf-8") as f:
         f.write(request.text)
         
     excerpt = request.text[:150] + "..." if len(request.text) > 150 else request.text
@@ -204,13 +186,13 @@ def save_document_history(request: SaveDocumentRequest, db: Session = Depends(ge
     db.commit()
     db.refresh(db_doc)
     
-    return {"status": "ok", "doc_id": db_doc.id, "file_path": file_path}
+    return {"status": "ok", "doc_id": str(db_doc.id), "file_path": file_path}
 
 @app.get("/api/history/list")
 def list_document_history(db: Session = Depends(get_db)):
     docs = db.query(models.DocumentHistory).order_by(models.DocumentHistory.created_at.desc()).all()
     return [{
-        "id": doc.id,
+        "id": str(doc.id),  # Serialización explícita a str para consistencia con UUIDs
         "title": doc.title,
         "excerpt": doc.excerpt,
         "tone_name": doc.tone_name,
@@ -218,7 +200,7 @@ def list_document_history(db: Session = Depends(get_db)):
     } for doc in docs]
 
 @app.get("/api/history/read/{doc_id}")
-def read_document_history(doc_id: int, db: Session = Depends(get_db)):
+def read_document_history(doc_id: str, db: Session = Depends(get_db)):
     doc = db.query(models.DocumentHistory).filter(models.DocumentHistory.id == doc_id).first()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -226,7 +208,9 @@ def read_document_history(doc_id: int, db: Session = Depends(get_db)):
     if not os.path.exists(doc.file_path):
         raise HTTPException(status_code=404, detail="File not found on disk")
         
-    with open(doc.file_path, "r", encoding="utf-8") as f:
+    # BUG FIX: Usando open() síncrono. Este endpoint es sync (def, no async def),
+    # por lo que usar aiofiles con await era un RuntimeError garantizado.
+    with open(doc.file_path, mode="r", encoding="utf-8") as f:
         content = f.read()
         
     return {"text": content}

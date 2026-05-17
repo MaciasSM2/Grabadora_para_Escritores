@@ -8,13 +8,13 @@ import { useUIStore } from '@/store/useUIStore';
 import { Settings, X, Upload, History, BookOpen, FileText, File, FileInput, Download } from 'lucide-react';
 import * as mammoth from 'mammoth';
 import { API_BASE } from '@/lib/api';
-import { exportTXT, exportAPACDocx } from '@/utils/exportUtils';
+import { exportService } from '@/infrastructure/export/ExportService';
 
 export default function SettingsMenu() {
   const { isSettingsOpen, settingsActiveTab, openSettings, closeSettings, setSettingsTab, setCurrentView } = useUIStore();
   
   const { toneName, referenceText, setTone } = useToneStore();
-  const { jobs, addJob, savedDocs, fetchHistory, fetchSavedDocs } = useHistoryStore();
+  const { jobs, addJob, savedDocs, fetchHistory, fetchSavedDocs, isLoading } = useHistoryStore();
   const { documentText, setDocumentText, resetStore } = useDictationStore();
 
   useEffect(() => {
@@ -85,9 +85,9 @@ export default function SettingsMenu() {
       });
 
       if (!response.ok) {
+        // Capturamos explícitamente errores del servidor
         const errorData = await response.json().catch(() => null);
-        const errorMessage = errorData?.detail || `Error HTTP ${response.status}`;
-        throw new Error(errorMessage);
+        throw new Error(errorData?.detail || `Error del servidor: HTTP ${response.status}`);
       }
       
       const data = await response.json();
@@ -111,7 +111,7 @@ export default function SettingsMenu() {
     }
   };
 
-  const handleActionSavedDoc = async (id: number, action: 'download-txt' | 'download-docx' | 'edit' | 'reprocess', title: string) => {
+  const handleActionSavedDoc = async (id: string, action: 'download-txt' | 'download-docx' | 'edit' | 'reprocess', title: string) => {
     try {
       const res = await fetch(`${API_BASE}/api/history/read/${id}`);
       if (res.ok) {
@@ -119,9 +119,9 @@ export default function SettingsMenu() {
         const text = data.text;
         
         if (action === 'download-txt') {
-          exportTXT(text, title);
+          await exportService.exportDocument('txt', text, title);
         } else if (action === 'download-docx') {
-          await exportAPACDocx(text, title);
+          await exportService.exportDocument('docx', text, title);
         } else if (action === 'edit') {
           setDocumentText(text);
           closeSettings();
@@ -291,7 +291,18 @@ export default function SettingsMenu() {
                       </span>
                     </h3>
                     
-                    {savedDocs.length === 0 ? (
+                    {/* Skeleton loader mientras carga, estado vacío cuando no hay datos */}
+                    {isLoading ? (
+                      <div className="flex flex-col gap-2 animate-pulse">
+                        {[1, 2, 3].map((i) => (
+                          <div key={i} className="p-3 border border-slate-200 dark:border-slate-800 rounded-lg">
+                            <div className="h-3 bg-slate-200 dark:bg-slate-700 rounded w-3/4 mb-2" />
+                            <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded w-full mb-1" />
+                            <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded w-2/3" />
+                          </div>
+                        ))}
+                      </div>
+                    ) : savedDocs.length === 0 ? (
                       <div className="text-center p-6 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-900/50">
                         <FileText className="mx-auto text-slate-300 dark:text-slate-600 mb-2" size={32} />
                         <p className="text-sm text-slate-500">No hay documentos guardados.</p>
@@ -350,7 +361,16 @@ export default function SettingsMenu() {
                       </span>
                     </h3>
                     
-                    {jobs.length === 0 ? (
+                    {isLoading ? (
+                      <div className="flex flex-col gap-2 animate-pulse">
+                        {[1, 2].map((i) => (
+                          <div key={i} className="p-3 border border-slate-200 dark:border-slate-800 rounded-lg">
+                            <div className="h-3 bg-slate-200 dark:bg-slate-700 rounded w-1/2 mb-2" />
+                            <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded w-full" />
+                          </div>
+                        ))}
+                      </div>
+                    ) : jobs.length === 0 ? (
                       <div className="text-center p-6 border border-slate-200 dark:border-slate-800 rounded-lg bg-slate-50 dark:bg-slate-900/50">
                         <History className="mx-auto text-slate-300 dark:text-slate-600 mb-2" size={32} />
                         <p className="text-sm text-slate-500">No hay audios transcritos.</p>

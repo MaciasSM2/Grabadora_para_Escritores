@@ -1,14 +1,17 @@
 import spacy
 import re
+import logging
 from typing import Optional
+
+logger = logging.getLogger("gema-nlp")
 
 class StyleProcessor:
     def __init__(self):
         try:
             self.nlp = spacy.load("es_core_news_sm")
-            print("Modelo de spaCy 'es_core_news_sm' cargado correctamente.")
+            logger.info("Modelo de spaCy 'es_core_news_sm' cargado correctamente.")
         except OSError:
-            print("El modelo de spaCy 'es_core_news_sm' no está instalado. Asegúrate de ejecutar: python -m spacy download es_core_news_sm")
+            logger.error("El modelo de spaCy 'es_core_news_sm' no está instalado. Asegúrate de ejecutar: python -m spacy download es_core_news_sm")
             self.nlp = None
 
     def process_text(self, text: str, tone_name: str, reference_text: Optional[str] = None) -> str:
@@ -27,6 +30,7 @@ class StyleProcessor:
         muletillas = {}
         suffix = ""
         
+        # Mapeo de tonos (usando strings para compatibilidad con la DB si es necesario, pero validado por Enum en la API)
         if tone_name == "Narrativa de Ciencia Ficción y Fantasía Épica":
             muletillas = {
                 r'\bdijo\b': 'proclamó',

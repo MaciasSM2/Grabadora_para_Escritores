@@ -10,7 +10,7 @@ export interface Job {
 }
 
 export interface SavedDocument {
-  id: number
+  id: string   // Actualizado a string para consistencia con UUIDs del backend
   title: string
   excerpt: string
   tone_name: string
@@ -20,6 +20,7 @@ export interface SavedDocument {
 interface HistoryState {
   jobs: Job[]
   savedDocs: SavedDocument[]
+  isLoading: boolean
   addJob: (job: Job) => void
   fetchHistory: () => Promise<void>
   fetchSavedDocs: () => Promise<void>
@@ -29,10 +30,12 @@ interface HistoryState {
 export const useHistoryStore = create<HistoryState>()(
   persist(
     (set) => ({
-      jobs: [],
+          jobs: [],
       savedDocs: [],
+      isLoading: false,
       addJob: (job) => set((state) => ({ jobs: [job, ...state.jobs] })),
       fetchHistory: async () => {
+        set({ isLoading: true });
         try {
           const res = await fetch(`${API_BASE}/api/history`);
           if (res.ok) {
@@ -41,9 +44,12 @@ export const useHistoryStore = create<HistoryState>()(
           }
         } catch (e) {
           console.error("Failed to fetch history", e);
+        } finally {
+          set({ isLoading: false });
         }
       },
       fetchSavedDocs: async () => {
+        set({ isLoading: true });
         try {
           const res = await fetch(`${API_BASE}/api/history/list`);
           if (res.ok) {
@@ -52,6 +58,8 @@ export const useHistoryStore = create<HistoryState>()(
           }
         } catch (e) {
           console.error("Failed to fetch saved documents", e);
+        } finally {
+          set({ isLoading: false });
         }
       },
       clearHistory: () => set({ jobs: [], savedDocs: [] }),
